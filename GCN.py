@@ -60,26 +60,17 @@ test_result = []
 
 # 最好的epoch
 best_loss = sys.float_info.max
-# 'sys.float_info.max'是Python语言中的一个浮点数常量，表示机器可表示的最大浮点数。
 
 # 训练
 for i in range(args.n_epochs):
     model.train()
     for batch in train_loader:
         optimizer.zero_grad()
-        # optimizer.zero_grad()是PyTorch中定义优化器的一个方法，它会将模型中所有可训练的参数的梯度清零。
-        # 在训练神经网络时，通常需要在每次迭代之前调用这个函数。因为如果不清零梯度，那么优化器在更新权重时会累加之前的梯度。
         prediction = model(batch[0].to(device), batch[1].to(device))
-        # 这段代码是用PyTorch框架调用训练好的模型进行推理预测。
-        # 其中，model是一个已经训练好的模型，batch是一个包含输入数据的批次，例如输入的文本序列和对应的标签。batch[0]
-        # 表示输入的文本序列，batch[1]表示对应的标签。to(device)是将输入数据放到指定的设备上进行计算，例如GPU。最终，prediction是模型的预测输出结果。
         train_loss = torch.sqrt(loss_function(batch[2].float().to(device), prediction))
-        # 反向传播，计算梯度
         train_loss.backward()
-        # 使用优化器更新模型参数
         optimizer.step()
-    # 将训练过程中每个batch的loss值记录在一个列表train_result中。train_loss.item()返回当前batch的loss值，
-    # .item()方法将该值从tensor类型转换为Python float类型，以便可以在列表中保存。
+
     train_result.append(train_loss.item())
 
     model.eval()
@@ -100,21 +91,71 @@ draw_loss_pic(train_result, test_result)
 model.load_state_dict(torch.load('./model/bestModeParms-{}.pth'.format(start_time)))
 model.eval()
 
-# 推荐Top-K项目
+# 评估指标：计算精确度、召回率、F1
+def get_positive_samples(user_id, rating_data):
+    user_ratings = rating_data[rating_data['user_id'] == user_id]
+    positive_samples = set(user_ratings[user_ratings['rating'] >= 3]['item_id'])
+    return positive_samples
+
+# 计算准确率
+def accuracy(user_id, top_k_items, rating_data, k=3):
+    positive_samples = get_positive_samples(user_id, rating_data)
+    recommended_items = set(top_k_items)
+    true_positive = len(positive_samples & recommended_items)
+    false_positive = k - true_positive
+    false_negative = len(positive_samples) - true_positive
+    true_negative = len(rating_data) - true_positive - false_positive - false_negative
+    accuracy_score = (true_positive + true_negative) / len(rating_data)
+    return accuracy_score
+
+# 计算精确度 (Precision)
+def precision(user_id, top_k_items, rating_data, k=3):
+    positive_samples = get_positive_samples(user_id, rating_data)
+    recommended_items = set(top_k_items)
+    true_positive = len(positive_samples & recommended_items)
+    false_positive = k - true_positive
+    precision_score = true_positive / (true_positive + false_positive) if true_positive + false_positive > 0 else 0
+    return precision_score
+
+# 计算召回率 (Recall)
+def recall(user_id, top_k_items, rating_data, k=3):
+    positive_samples = get_positive_samples(user_id, rating_data)
+    recommended_items = set(top_k_items)
+    true_positive = len(positive_samples & recommended_items)
+    false_negative = len(positive_samples) - true_positive
+    recall_score = true_positive / (true_positive + false_negative) if true_positive + false_negative > 0 else 0
+    return recall_score
+
+# 计算 F1 分数
+def f1_score(precision, recall):
+    return 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+
+# 推荐Top-K并计算评估指标
 while True:
+    user_id = input("请输入用户id (输入 'quit' 退出):")
+    if user_id == 'quit':
+        break
 
-  user_id = input("请输入用户id:")
-  if user_id == 'quit':
-     break
+    user_tensor = torch.tensor([int(user_id)] * model.num_item).to(device)  # 用户ID转换为张量
+    item_tensor = torch.arange(model.num_item).to(device)  # 创建一个物品张量
 
-  user_tensor = torch.tensor([int(user_id)] * model.num_item).to(device) #用户ID转换为张量
-  item_tensor = torch.arange(model.num_item).to(device) #创建一个张量
+    predictions = model(user_tensor, item_tensor)
+    top_k_items = torch.topk(predictions, k=3)[1]
 
-  predictions = model(user_tensor, item_tensor)
-  top_k_items = torch.topk(predictions, k=3)[1]
+    # 计算评估指标
+    top_k_items_list = top_k_items.cpu().numpy().tolist()
+    acc = accuracy(int(user_id), top_k_items_list, rating, k=3)
+    prec = precision(int(user_id), top_k_items_list, rating, k=3)
+    rec = recall(int(user_id), top_k_items_list, rating, k=3)
+    f1 = f1_score(prec, rec)
 
-  print("推荐项目:")
-  for item in top_k_items:
-     item = item.item()
-     print(item_feature.loc[item]['id'])
+    print("推荐项目:")
+    for item in top_k_items:
+        item = item.item()
+        print(item_feature.loc[item]['id'])
 
+    # 打印评估结果
+    print(f"用户{user_id}的Top-3推荐准确率: {acc:.4f}")
+    print(f"用户{user_id}的推荐精确度: {prec:.4f}")
+    print(f"用户{user_id}的推荐召回率: {rec:.4f}")
+    print(f"用户{user_id}的推荐F1值: {f1:.4f}")
